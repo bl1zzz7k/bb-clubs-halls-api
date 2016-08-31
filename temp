@@ -75,3 +75,36 @@
     #  except Exception:
     #      results_callback
     #      print "FATALLLLL"
+
+
+
+
+logger = logging.getLogger('myapp')
+logger.setLevel(logging.DEBUG)
+file_handler = logging.FileHandler('myapp.log')
+formatter = logging.Formatter('%(msg)s')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+def log_to_logger(fn):
+    @wraps(fn)
+    def _log_to_logger(*args, **kwargs):
+        request_time = datetime.now()
+        actual_response = fn(*args, **kwargs)
+        # modify this to log exactly what you need:
+        logger.info('%s %s %s %s %s' % (request.remote_addr,
+                                        request_time,
+                                        request.method,
+                                        request.url,
+                                        response.status))
+        return actual_response
+    return _log_to_logger
+
+
+
+app = Bottle()
+
+
+app.install(log_to_logger)
+app.run(host='localhost', port='8080', debug=False, quiet=False)
