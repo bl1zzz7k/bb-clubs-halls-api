@@ -1,4 +1,12 @@
 #!/usr/bin/env python2.7
+
+'''
+All request in format "http://10.0.0.0/{{ID_HALL}}?ip={{IP_ADDRESS}}&port={{SSH_PORT}}&user={{USERNAME}}&pswrd={{PASSWORD}}"
+POST - install systemd unit in hall
+DELETE - delete systemd unit in hall
+GET - status systemd unit in hall
+'''
+
 import json
 import os
 from collections import namedtuple
@@ -8,14 +16,14 @@ from ansible.inventory import Inventory
 from ansible.executor.playbook_executor import PlaybookExecutor
 from ansible.plugins.callback import CallbackBase
 from bottle import request, Bottle
-from pexpect import pxssh, expect, spawn, fdpexpect, EOF
-from time import sleep
+from pexpect import pxssh
 
 PLAYBOOK_INSTALL_PATH = '/home/dzv/workflow/ansible/playbooks/ssh-redirector/ssh-redirector-install.yml'
 PLAYBOOK_REMOVE_PATH = '/home/dzv/workflow/ansible/playbooks/ssh-redirector/ssh-redirector-remove.yml'
 ANSIBLE_KEY = '/etc/secret/ansible/ansible_key'
 BASE_DIR = '/home/dzv/workflow/ansible'
-UNIT = '/etc/systemd/system/ssh-redirector.service'
+PORT_API = '8080'
+LISTEN_IP = 'localhost'
 
 class Halls(object):
     def __init__(self, id, ip, port, user, pswrd):
@@ -42,8 +50,6 @@ class Halls(object):
             'syntax',
             'module_path',
             'connection',
-            'remote_user',
-            'sudo',
             'become_method',
             'become_user',
             'check',
@@ -58,8 +64,6 @@ class Halls(object):
                           syntax=False,
                           module_path=None,
                           connection='ssh',
-                          remote_user=self.user,
-                          sudo=True,
                           become_method='sudo',
                           become_user='root',
                           check=False,
@@ -78,7 +82,8 @@ class Halls(object):
         variable_manager.extra_vars = dict(host=self.ip,
                                            ansible_ssh_port=self.port,
                                            id=self.id,
-                                           secret_root=basedir
+                                           secret_root=basedir,
+                                           ansible_user=self.user
                                            )
         variable_manager.set_inventory(inventory)
 
@@ -122,17 +127,29 @@ class Halls(object):
             session.prompt()
             result = session.before
             session.logout()
-            for line in result:
-                if "ActiveState=" in line:
-                    state = line
-                elif "Description=" in line:
-                    hall = line
+
+            for line in result.splitlines():
+                if 'LoadError' not in line:
+                    if "ActiveState=" in line:
+                        state = (line.split("="))[1]
+                    elif "Description=" in line:
+                        hall = line[(len(line) - 4):]
+                    elif "ExecStart=" in line:
+                        exec_raw = line.split(";")
+                        command = exec_raw[1][8:((len(exec_raw[1])) - 1)]
+                        code = exec_raw[6].split('=')[1][0:(len(exec_raw[6].split('=')[1]) - 1)]
+                        status = exec_raw[7].split('=')[1].split(' ')[0]
+                else:
+                    hall = self.id
+                    state = command = code = status = 'Unknown'
 
         except pxssh.ExceptionPxssh as e:
-            return(e)
+            hall = self.id
+            state = command = code = status = 'Could not establish connection to host'
         finally:
-            print state
-            print hall
+            status_raw = {self.ip: {hall: {'ServiceState': state, 'ExecCommand': command, 'ExecCode': code,
+                                           'ExecStatus': status}}}
+            return json.dumps(status_raw, indent=4)
 
 
 class ResultCallback(CallbackBase):
@@ -182,9 +199,7 @@ def req_halls(halls):
 @app.error(404)
 @app.error(405)
 def error(error):
-    return "Please do post/get/delete request in /halls?ip=?user=?pswrd="
+    return "Please do post/get/delete request in format: \n" \
+           "'http://10.0.0.0/{{ID_HALL}}?ip={{IP_ADDRESS}}&port={{SSH_PORT}}&user={{USERNAME}}&pswrd={{PASSWORD}}'"
 
-app.run(host='localhost', port='8080', debug=False, quiet=False)
-
-if __name__ == '__main__':
-    main ()
+app.run(host=LISTEN_IP, port=PORT_API, quiet=True)
