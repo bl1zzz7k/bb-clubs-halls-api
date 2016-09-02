@@ -1,0 +1,6 @@
+- hosts: '{{ host }}'
+  become_method: sudo
+  become: True
+  become_user: root
+  roles:
+    - bingo-boom.ru.ssh-redirector-remove

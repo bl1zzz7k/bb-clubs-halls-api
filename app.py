@@ -1,12 +1,4 @@
 #!/usr/bin/env python2.7
-
-'''
-All request in format "http://10.0.0.0/{{ID_HALL}}?ip={{IP_ADDRESS}}&port={{SSH_PORT}}&user={{USERNAME}}&pswrd={{PASSWORD}}"
-POST - install systemd unit in hall
-DELETE - delete systemd unit in hall
-GET - status systemd unit in hall
-'''
-
 import json
 import os
 from collections import namedtuple
@@ -15,15 +7,40 @@ from ansible.vars import VariableManager
 from ansible.inventory import Inventory
 from ansible.executor.playbook_executor import PlaybookExecutor
 from ansible.plugins.callback import CallbackBase
-from bottle import request, Bottle
+from bottle import request, route, redirect, run
 from pexpect import pxssh
 
-PLAYBOOK_INSTALL_PATH = '/home/dzv/workflow/ansible/playbooks/ssh-redirector/ssh-redirector-install.yml'
-PLAYBOOK_REMOVE_PATH = '/home/dzv/workflow/ansible/playbooks/ssh-redirector/ssh-redirector-remove.yml'
-ANSIBLE_KEY = '/etc/secret/ansible/ansible_key'
-BASE_DIR = '/home/dzv/workflow/ansible'
-PORT_API = '8080'
-LISTEN_IP = 'localhost'
+'''
+example input JSON:
+{
+    "ID":"5525",
+    "IP_ADDRESS":"10.14.27.58",
+    "SSH_PORT":"22",
+    "USER":"user",
+    "PASSWORD":"123",
+    "COMMAND": "install" {install | delete | status}
+}
+'''
+
+class Init():
+    def __init__(self, config):
+        self.config = config
+
+    def LoadCfg(self):
+        global PLAYBOOK_INSTALL_PATH, PLAYBOOK_REMOVE_PATH, ANSIBLE_KEY, BASE_DIR, PORT_API, LISTEN_IP
+        with open(self.config) as conf_file:
+            conf_data = json.load(conf_file)
+
+        PLAYBOOK_INSTALL_PATH = conf_data['PLAYBOOK_INSTALL_PATH']
+        PLAYBOOK_REMOVE_PATH = conf_data['PLAYBOOK_REMOVE_PATH']
+        ANSIBLE_KEY = conf_data['ANSIBLE_KEY']
+        BASE_DIR = conf_data['BASE_DIR']
+        PORT_API = conf_data['PORT_API']
+        LISTEN_IP = conf_data['LISTEN_IP']
+
+    def RunApi(self):
+        run(host=LISTEN_IP, port=PORT_API, quiet=True)
+
 
 class Halls(object):
     def __init__(self, id, ip, port, user, pswrd):
@@ -53,7 +70,9 @@ class Halls(object):
             'become_method',
             'become_user',
             'check',
-            'private_key_file'
+            'private_key_file',
+            'retry_files_enabled',
+            'retry_files_save_path'
         })
         options = Options(verbosity=5,
                           forks=100,
@@ -65,9 +84,11 @@ class Halls(object):
                           module_path=None,
                           connection='ssh',
                           become_method='sudo',
-                          become_user='root',
+                          become_user=self.user,
                           check=False,
-                          private_key_file=ansible_key
+                          private_key_file=ansible_key,
+                          retry_files_enabled=False,
+                          retry_files_save_path = '/tmp/'
                           )
 
         results_callback = ResultCallback()
@@ -76,14 +97,17 @@ class Halls(object):
 
         inventory = Inventory(loader=loader,
                               variable_manager=variable_manager,
-                              host_list=[self.ip]
+                              host_list=[self.ip,]
                               )
 
         variable_manager.extra_vars = dict(host=self.ip,
+                                           ansible_ssh_host=self.ip,
                                            ansible_ssh_port=self.port,
                                            id=self.id,
                                            secret_root=basedir,
-                                           ansible_user=self.user
+                                           ansible_ssh_user=self.user,
+                                           remote_user=self.user,
+                                           ansible_ssh_pass=self.pswrd
                                            )
         variable_manager.set_inventory(inventory)
 
@@ -117,8 +141,6 @@ class Halls(object):
         return json.dumps(results_raw, indent=4)
 
     def statusHalls(self):
-        status = "systemctl status ssh-redirector"
-
         try:
             session = pxssh.pxssh()
             session.force_password = True
@@ -127,7 +149,7 @@ class Halls(object):
             session.prompt()
             result = session.before
             session.logout()
-
+#
             for line in result.splitlines():
                 if 'LoadError' not in line:
                     if "ActiveState=" in line:
@@ -174,32 +196,25 @@ class ResultCallback(CallbackBase):
         self.host_failed_result[self.task] = result
 
 
-app = Bottle()
-
-@app.post('/<halls:int>')
-@app.get('/<halls:int>')
-@app.delete('/<halls:int>')
-
-def req_halls(halls):
-
+@route('/', method='POST')
+def reqest_halls():
+    halls=Halls(request.json['ID'], request.json['IP_ADDRESS'], request.json['SSH_PORT'], request.json['USER'], request.json['PASSWORD'])
     global PLAYBOOK_PATH
-    halls=Halls(halls, request.query.ip, request.query.port, request.query.user, request.query.pswrd)
 
-    if  request.method == "POST":
+    if request.json['COMMAND'] == 'install':
         PLAYBOOK_PATH=PLAYBOOK_INSTALL_PATH
         return halls.PlayWithBook
 
-    elif request.method == "GET":
+    elif request.json['COMMAND'] == 'status':
         return halls.statusHalls()
 
-    elif request.method == "DELETE":
+    elif request.json['COMMAND'] == 'delete':
         PLAYBOOK_PATH = PLAYBOOK_REMOVE_PATH
         return halls.PlayWithBook
+    else:
+        return redirect('/', code=400)
 
-@app.error(404)
-@app.error(405)
-def error(error):
-    return "Please do post/get/delete request in format: \n" \
-           "'http://10.0.0.0/{{ID_HALL}}?ip={{IP_ADDRESS}}&port={{SSH_PORT}}&user={{USERNAME}}&pswrd={{PASSWORD}}'"
-
-app.run(host=LISTEN_IP, port=PORT_API, quiet=True)
+if __name__ == "__main__":
+    api = Init('conf.json')
+    api.LoadCfg()
+    api.RunApi()

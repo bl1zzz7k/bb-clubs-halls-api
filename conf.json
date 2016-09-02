@@ -1,0 +1,8 @@
+{
+  "PLAYBOOK_INSTALL_PATH" : "ssh-redirector-install.yml",
+  "PLAYBOOK_REMOVE_PATH" : "ssh-redirector-remove.yml",
+  "ANSIBLE_KEY" : "/etc/secret/ansible/ansible_key",
+  "BASE_DIR" : "/home/dzv/workflow/ansible",
+  "PORT_API" : "8080",
+  "LISTEN_IP" : "127.0.0.1"
+}
